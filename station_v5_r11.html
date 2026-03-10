@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>仮想駅 流体ヒートマップ v5</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Noto+Sans+JP:wght@300;400&display=swap');
+
+:root {
+  --bg: #f4f6f9;
+  --panel-bg: rgba(255,255,255,0.92);
+  --border: rgba(30,80,180,0.15);
+  --accent: #1e50b4;
+  --accent2: #e8320a;
+  --text-main: #1a2a4a;
+  --text-sub: #7a8eaa;
+  --shadow: 0 2px 20px rgba(30,80,180,0.10);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); overflow:hidden; font-family:'DM Mono','Noto Sans JP',monospace; }
+canvas { display:block; }
+
+/* ── TOP BAR ── */
+#topbar {
+  position:fixed; top:0; left:0; right:0;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:13px 28px;
+  background:rgba(244,246,249,0.96);
+  border-bottom:1px solid var(--border);
+  backdrop-filter:blur(10px); z-index:10;
+  box-shadow: 0 1px 12px rgba(30,80,180,0.07);
+}
+.title { font-size:11px; letter-spacing:4px; color:var(--accent); font-weight:500; text-transform:uppercase; }
+#clock { font-size:30px; color:var(--text-main); letter-spacing:3px; font-weight:300; }
+#phase-badge {
+  font-size:11px; letter-spacing:2px; padding:6px 14px;
+  border:1.5px solid var(--accent2); background:rgba(232,50,10,0.06);
+  color:var(--accent2); border-radius:4px; font-weight:500;
+}
+
+/* ── PANELS ── */
+.panel {
+  position:fixed; background:var(--panel-bg); border:1px solid var(--border);
+  border-radius:8px; padding:16px 18px; backdrop-filter:blur(12px);
+  z-index:10; box-shadow:var(--shadow);
+}
+#left-panel { left:20px; top:72px; width:220px; }
+#right-panel { right:20px; top:72px; width:200px; }
+#flow-panel  { left:20px; bottom:72px; width:220px; }
+
+.panel h3 { font-size:10px; letter-spacing:3px; color:var(--accent); margin-bottom:13px; opacity:0.75; font-weight:500; }
+.floor-row { margin-bottom:12px; }
+.floor-row .fl { font-size:10px; letter-spacing:1.5px; color:var(--text-sub); margin-bottom:5px; display:flex; justify-content:space-between; }
+.floor-row .fl span { color:var(--text-main); font-weight:500; }
+.meter-bg { height:5px; background:rgba(30,80,180,0.08); border-radius:3px; overflow:hidden; }
+.meter-fill { height:100%; border-radius:3px; transition:width 0.4s ease; background:linear-gradient(90deg,#4a90e2,#e8320a); }
+.divider { border:none; border-top:1px solid var(--border); margin:11px 0; }
+.legend-title { font-size:10px; letter-spacing:2px; color:var(--text-sub); margin-bottom:7px; }
+.legend-grad { height:7px; border-radius:4px; margin-bottom:4px;
+  background:linear-gradient(90deg,#2196f3,#00bcd4,#4caf50,#ffeb3b,#ff9800,#f44336); }
+.legend-lbl { display:flex; justify-content:space-between; font-size:9px; color:var(--text-sub); }
+
+.struct-item { display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:10px; color:var(--text-sub); letter-spacing:1px; }
+.dot { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+.ratio { margin-left:auto; color:var(--accent); font-size:9px; font-weight:500; }
+
+.flow-row { display:flex; align-items:center; gap:6px; margin-bottom:8px; font-size:10px; color:var(--text-sub); }
+.flow-row span { width:76px; flex-shrink:0; }
+.flow-bar-bg { flex:1; height:4px; background:rgba(30,80,180,0.08); border-radius:2px; overflow:hidden; }
+.flow-bar { height:100%; border-radius:2px; transition:width 0.5s ease; }
+
+/* ── TIMELINE ── */
+#timeline {
+  position:fixed; bottom:18px; left:50%; transform:translateX(-50%);
+  display:flex; background:var(--panel-bg); border:1px solid var(--border);
+  border-radius:8px; overflow:hidden; backdrop-filter:blur(12px);
+  z-index:10; box-shadow:var(--shadow);
+}
+.tl-phase { padding:9px 16px; font-size:10px; letter-spacing:2px; color:var(--text-sub);
+  border-right:1px solid var(--border); transition:all 0.3s; text-align:center; line-height:1.7; }
+.tl-phase:last-child { border-right:none; }
+.tl-phase.active { background:rgba(30,80,180,0.07); color:var(--accent); }
+.tl-phase .tl-time { display:block; font-size:9px; color:var(--accent); margin-bottom:1px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="topbar">
+  <div class="title">🚉 VIRTUAL STATION — CROWD FLOW</div>
+  <div id="clock">07:58</div>
+  <div id="phase-badge">PHASE 0 / 電車到着待ち</div>
+</div>
+
+<div class="panel" id="left-panel">
+  <h3>CONGESTION</h3>
+  <div class="floor-row">
+    <div class="fl">1F PLATFORM <span id="pct1">0%</span></div>
+    <div class="meter-bg"><div class="meter-fill" id="fill1" style="width:0%"></div></div>
+  </div>
+  <div class="floor-row">
+    <div class="fl">2F CONCOURSE <span id="pct2">0%</span></div>
+    <div class="meter-bg"><div class="meter-fill" id="fill2" style="width:0%"></div></div>
+  </div>
+  <div class="floor-row">
+    <div class="fl">EXIT FLOW <span id="pctE">0%</span></div>
+    <div class="meter-bg"><div class="meter-fill" id="fillE" style="width:0%;background:linear-gradient(90deg,#26a69a,#00e5ff)"></div></div>
+  </div>
+  <hr class="divider">
+  <div class="legend-title">HEATMAP</div>
+  <div class="legend-grad"></div>
+  <div class="legend-lbl"><span>低密度</span><span>高密度</span></div>
+</div>
+
+<div class="panel" id="right-panel">
+  <h3>FLOW RATIO</h3>
+  <div class="struct-item"><div class="dot" style="background:#607d8b"></div>階段 A (西)<span class="ratio">3/10</span></div>
+  <div class="struct-item"><div class="dot" style="background:#607d8b"></div>階段 B (東)<span class="ratio">3/10</span></div>
+  <div class="struct-item"><div class="dot" style="background:#00bfa5"></div>エスカレーター<span class="ratio">3/10</span></div>
+  <div class="struct-item"><div class="dot" style="background:#9c27b0"></div>エレベーター<span class="ratio">1/10</span></div>
+  <hr class="divider">
+  <h3 style="margin-bottom:10px">STRUCTURE</h3>
+  <div class="struct-item"><div class="dot" style="background:#1565c0"></div>電車</div>
+  <div class="struct-item"><div class="dot" style="background:#e8320a"></div>改札 ×2</div>
+  <div class="struct-item"><div class="dot" style="background:#00897b"></div>出口 A / B</div>
+  <div class="struct-item"><div class="dot" style="background:#f9a825"></div>キオスク ×1</div>
+</div>
+
+<div class="panel" id="flow-panel">
+  <h3>VERTICAL FLOW</h3>
+  <div class="flow-row"><span>階段 A (西)</span><div class="flow-bar-bg"><div class="flow-bar" id="fb-stairL" style="background:#607d8b"></div></div></div>
+  <div class="flow-row"><span>階段 B (東)</span><div class="flow-bar-bg"><div class="flow-bar" id="fb-stairR" style="background:#607d8b"></div></div></div>
+  <div class="flow-row"><span>エスカレーター</span><div class="flow-bar-bg"><div class="flow-bar" id="fb-esc" style="background:#00bfa5"></div></div></div>
+  <div class="flow-row"><span>エレベーター</span><div class="flow-bar-bg"><div class="flow-bar" id="fb-elv" style="background:#9c27b0"></div></div></div>
+</div>
+
+<div id="timeline">
+  <div class="tl-phase active" id="tlp0"><span class="tl-time">07:58</span>待機</div>
+  <div class="tl-phase" id="tlp1"><span class="tl-time">08:00</span>到着・降車</div>
+  <div class="tl-phase" id="tlp2"><span class="tl-time">08:02</span>縦移動</div>
+  <div class="tl-phase" id="tlp3"><span class="tl-time">08:04</span>改札混雑</div>
+  <div class="tl-phase" id="tlp4"><span class="tl-time">08:08</span>解消・退出</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ═══════════════════════════════════════════════
+//  RENDERER
+// ═══════════════════════════════════════════════
+const canvas = document.getElementById('c');
+const W = window.innerWidth, H = window.innerHeight;
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+renderer.setSize(W,H);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.sortObjects = true;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf4f6f9);
+scene.fog = new THREE.Fog(0xf4f6f9, 180, 380);
+
+const cam = new THREE.PerspectiveCamera(42, W/H, 0.1, 500);
+cam.position.set(95, 65, 90);
+cam.lookAt(0, 4, 0);
+
+// ═══════════════════════════════════════════════
+//  LIGHTS  (brighter for white bg)
+// ═══════════════════════════════════════════════
+scene.add(new THREE.AmbientLight(0xffffff, 1.8));
+const dir = new THREE.DirectionalLight(0xffffff, 0.7);
+dir.position.set(30,50,30); scene.add(dir);
+const dir2 = new THREE.DirectionalLight(0xddeeff, 0.3);
+dir2.position.set(-20,30,-10); scene.add(dir2);
+
+// ═══════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════
+function mkBox(w,h,d,color,opacity=1){
+  return new THREE.Mesh(
+    new THREE.BoxGeometry(w,h,d),
+    new THREE.MeshPhongMaterial({color,opacity,transparent:opacity<1,
+      depthWrite:opacity>0.55,shininess:30,side:THREE.DoubleSide})
+  );
+}
+function pl(m){ scene.add(m); return m; }
+function addEdge(mesh,col=0x3a6abf,op=0.3){
+  const e = new THREE.LineSegments(
+    new THREE.EdgesGeometry(mesh.geometry),
+    new THREE.LineBasicMaterial({color:col,opacity:op,transparent:true})
+  );
+  e.position.copy(mesh.position);
+  e.rotation.copy(mesh.rotation);
+  e.scale.copy(mesh.scale);
+  scene.add(e);
+}
+
+// ═══════════════════════════════════════════════
+//  STRUCTURE — 2島ホーム駅（平面図準拠）
+//  X: 駅長方向 -70〜+70  Z: 幅方向  Y: 高さ 1F=0, 2F=6.5
+//  ホーム12(山手線): z中心=-8  ホーム34(京浜東北): z中心=+8
+// ═══════════════════════════════════════════════
+
+// ── 1F ホーム床（2島）──
+function makePlatform(zc){
+  const p=mkBox(140,0.3,6,0xdce8f5,0.62); p.position.set(0,0.15,zc); pl(p); addEdge(p,0x5a82c0,0.4);
+  // 黄色エッジ
+  [-3,3].forEach(dz=>{ const e=mkBox(140,0.12,0.22,0xffc400,1.0); e.position.set(0,0.35,zc+dz*1.67); pl(e); });
+}
+makePlatform(-8);
+makePlatform(+8);
+
+// ── 線路（4本）──
+[-12.2,-4.2,+4.2,+12.2].forEach(zr=>{
+  const ra=mkBox(140,0.08,0.12,0x8a9eaa,0.9); ra.position.set(0,0.05,zr-0.45); pl(ra);
+  const rb=mkBox(140,0.08,0.12,0x8a9eaa,0.9); rb.position.set(0,0.05,zr+0.45); pl(rb);
+  for(let x=-68;x<=68;x+=1.8){
+    const t=mkBox(0.15,0.06,2.2,0xaabbcc,0.55); t.position.set(x,0.03,zr); pl(t);
+  }
+});
+
+// ── 2F コンコース床 ──
+const f2=mkBox(140,0.4,22,0xbfd0ea,0.72); f2.position.set(0,6.35,0); pl(f2); addEdge(f2,0x4a72b8,0.5);
+for(let x=-56;x<=56;x+=14){
+  const g=mkBox(0.07,0.02,22,0xa0b8d8,0.4); g.position.set(x,6.58,0); pl(g);
+}
+
+// ── 縦動線ヘルパー ──
+// 階段: ホーム平行（X軸方向）、Z方向に踏面が並ぶ
+function addStairs(px, pz1F){
+  // 踏面8段：X方向に伸びる板、Z位置は固定、高さだけ上がる
+  for(let i=0;i<8;i++){
+    const s=mkBox(3,0.22,0.65,0x90a8c0,0.82);
+    s.position.set(px, 0.3+i*0.75, pz1F+i*0.62); pl(s);
+  }
+  // 手すり: Z方向に伸びる（ホーム→2F）
+  [-1.4,1.4].forEach(dz=>{
+    const pts=[
+      new THREE.Vector3(px,0.5,pz1F),
+      new THREE.Vector3(px,6.3,pz1F+5.2)
+    ];
+    pl(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({color:0x7090b0,opacity:0.75,transparent:true})));
+  });
+}
+
+// ESC: ホーム平行（X軸方向）、ステップはZに沿って上昇
+function addEsc(px, pz1F, col){
+  for(let i=0;i<8;i++){
+    const s=mkBox(3.0,0.18,0.55,col,0.92);
+    s.position.set(px, 0.35+i*0.77, pz1F+i*0.60); pl(s);
+  }
+  // サイドパネル: Z方向に伸びる薄板
+  [-1.5,1.5].forEach(dx=>{
+    const s=mkBox(0.1,6.2,5.5,col,0.28);
+    s.position.set(px+dx, 3.4, pz1F+2.4); pl(s);
+  });
+  const el=new THREE.PointLight(col,0.7,10); el.position.set(px,7,pz1F+2); scene.add(el);
+}
+
+function addElv(px, pz1F){
+  const s=mkBox(2.2,6.7,2.2,0x9c27b0,0.22); s.position.set(px,3.35,pz1F); pl(s); addEdge(s,0xce93d8,0.5);
+  const d=mkBox(1.5,5,0.1,0xba68c8,0.48); d.position.set(px,3.2,pz1F+1.15); pl(d);
+  const el=new THREE.PointLight(0x9c27b0,0.75,8); el.position.set(px,7,pz1F); scene.add(el);
+  return el;
+}
+
+// ホーム12（山手線）縦動線
+// ELV: x=-15, x=+40（固定）
+// 階段: x=-20(ELVから-5), x=+35(ELVから-5)
+// ESC:  x=-10(ELVから+5), x=+45(ELVから+5)
+// 追加設備: x=+55(C), x=-45(D)
+const ESC_COL=0x00bfa5;
+// ホーム12: pz1Fはホームエッジ(-5)からコンコース(0)方向へ
+addStairs(-20,-5.0); addEsc(-10,-5.0,ESC_COL);
+addStairs(+35,-5.0); addEsc(+45,-5.0,ESC_COL);
+addStairs(+55,-5.0); addEsc(+55,-5.0,ESC_COL);  // C: 東端
+addStairs(-45,-5.0); addEsc(-45,-5.0,ESC_COL);  // D: 西端
+const elvLight1=addElv(-15,-8);
+const elvLight2=addElv(+40,-8);
+
+// ホーム34（京浜東北）縦動線 pz1FはELV側(+5)から
+addStairs(-20,+5.0); addEsc(-10,+5.0,ESC_COL);
+addStairs(+35,+5.0); addEsc(+45,+5.0,ESC_COL);
+addStairs(+55,+5.0); addEsc(+55,+5.0,ESC_COL);
+addStairs(-45,+5.0); addEsc(-45,+5.0,ESC_COL);
+addElv(-15,+8);
+addElv(+40,+8);
+
+// ── 2F 改札（北向き：Z方向に面する）南改札x=-40 / 北改札x=+25 ──
+const GATE_COL=0xe8320a;
+[[-40,[-6,-2,2,6]],[25,[-6,-2,2,6]]].forEach(([cx,xs])=>{
+  // 改札帯: X方向に伸びる（北向き正面）
+  const strip=mkBox(16,0.08,3,GATE_COL,0.88); strip.position.set(cx,6.46,0); pl(strip);
+  xs.forEach(gx=>{
+    // ポール: X軸方向に並べる
+    const p1=mkBox(0.25,2.2,0.25,GATE_COL,1.0); p1.position.set(cx+gx,7.5,-0.6); pl(p1);
+    const p2=mkBox(0.25,2.2,0.25,GATE_COL,1.0); p2.position.set(cx+gx,7.5,+0.6); pl(p2);
+    const arm=mkBox(0.08,0.08,1.4,GATE_COL,0.9); arm.position.set(cx+gx,8.7,0); pl(arm);
+  });
+  // サイン: Z方向正面に向ける
+  const sign=mkBox(16,0.6,0.1,GATE_COL,0.8); sign.position.set(cx,9.4,0); pl(sign);
+  const gl=new THREE.PointLight(GATE_COL,1.0,12); gl.position.set(cx,9,0); scene.add(gl);
+  // 誘導マーカー: Z方向
+  const mk=mkBox(0.04,0.04,6,GATE_COL,0.3); mk.position.set(cx,6.47,3); pl(mk);
+});
+const gateXsCenters=[-40,25];
+
+// ── 2F 出口（南口: x=-40,z=-11 / 北口: x=+25,z=-11）──
+const EXIT_COL=0x00897b;
+const exitLights=[];
+[[-40,'南口'],[25,'北口']].forEach(([x,label])=>{
+  const fr=mkBox(5,4.5,0.25,0xe8f5f3,0.85); fr.position.set(x,8.5,-10.8); pl(fr); addEdge(fr,EXIT_COL,0.8);
+  const door=mkBox(4,3.8,0.1,EXIT_COL,0.15); door.position.set(x,8.4,-10.75); pl(door);
+  const thr=mkBox(4.5,0.06,0.8,EXIT_COL,0.9); thr.position.set(x,6.44,-10.5); pl(thr);
+  [-9.2,-8.0].forEach(z=>{ const ar=mkBox(3.5,0.05,0.75,EXIT_COL,0.4); ar.position.set(x,6.45,z); pl(ar); });
+  const sig=mkBox(3.5,0.6,0.1,EXIT_COL,0.8); sig.position.set(x,9.8,-10.8); pl(sig);
+  const el=new THREE.PointLight(EXIT_COL,1.5,12); el.position.set(x,9,-10); scene.add(el);
+  exitLights.push(el);
+});
+
+// ── 電車×2本 ──
+// 線路内側: z=-4.2(山手内側) / z=+4.2(京浜内側)
+// 電車はホームの横（内側線路）を走る
+// 山手線: 西→東、京浜東北: 東→西
+function makeTrain(zRail, platformZ){
+  const tg=new THREE.Group();
+  // 車体: 線路中央Z（幅3.6でホームに被らない）
+  const body=mkBox(130,3.1,3.6,0x1565c0,0.78); body.position.set(0,1.85,zRail); tg.add(body);
+  // 窓・ドア: ホーム側（内側）の面
+  const dzWin = platformZ < 0 ? (platformZ - zRail) : (platformZ - zRail);
+  const winZ = zRail + Math.sign(platformZ - zRail)*1.82;
+  for(let x=-60;x<=60;x+=2.8){
+    const w=mkBox(1.7,1.1,0.1,0x90caf9,0.62); w.position.set(x,2.2,winZ); tg.add(w);
+  }
+  [-48,-32,-16,0,16,32,48].forEach(x=>{
+    const d=mkBox(1.4,2.7,0.08,0x0d47a1,0.83); d.position.set(x,1.85,winZ); tg.add(d);
+  });
+  const base=mkBox(130,0.5,3.6,0x0d47a1,0.88); base.position.set(0,0.44,zRail); tg.add(base);
+  scene.add(tg);
+  return tg;
+}
+// 山手線: 線路内側z=-4.2、ホームz=-8
+const trainGroup = makeTrain(-4.2, -8);
+trainGroup.position.x=-160;
+// 京浜東北: 線路内側z=+4.2、ホームz=+8
+const trainGroup2 = makeTrain(+4.2, +8);
+trainGroup2.position.x=+160;
+
+// ── キオスク（改札階東端、出入口に平行：Z方向）──
+const kx=62, kz=0;
+{ // キオスク本体（Z方向に向く）
+  const kb=mkBox(2.8,2.2,5,0x3d3020,0.7); kb.position.set(kx,7.6,kz); pl(kb); addEdge(kb,0xf9a825,0.5);
+  const ks=mkBox(0.12,0.38,5.1,0xf9a825,0.95); ks.position.set(kx+1.45,8.9,kz); pl(ks);
+  const kl=new THREE.PointLight(0xf9a825,1.2,9); kl.position.set(kx,9.5,kz); scene.add(kl);
+}
+
+// ═══════════════════════════════════════════════
+//  CANVAS-TEXTURE HEATMAP ENGINE
+// ═══════════════════════════════════════════════
+
+function heatRGBA(h,alpha){
+  const stops=[
+    [0.00,[10,80,240]],[0.20,[0,190,230]],[0.40,[20,210,80]],
+    [0.60,[255,230,0]],[0.78,[255,110,0]],[1.00,[240,20,20]],
+  ];
+  let lo=stops[0],hi=stops[stops.length-1];
+  for(let i=0;i<stops.length-1;i++){
+    if(h>=stops[i][0]&&h<stops[i+1][0]){lo=stops[i];hi=stops[i+1];break;}
+  }
+  const t=(h-lo[0])/(hi[0]-lo[0]+1e-9);
+  const r=Math.round(lo[1][0]+(hi[1][0]-lo[1][0])*t);
+  const g=Math.round(lo[1][1]+(hi[1][1]-lo[1][1])*t);
+  const b=Math.round(lo[1][2]+(hi[1][2]-lo[1][2])*t);
+  return `rgba(${r},${g},${b},${alpha.toFixed(3)})`;
+}
+
+function makeHeatLayer(worldX0,worldX1,worldZ0,worldZ1,worldY,res){
+  const W=res,H=Math.round(res*(worldZ1-worldZ0)/(worldX1-worldX0));
+  const cv=document.createElement('canvas');
+  cv.width=W;cv.height=H;
+  const ctx=cv.getContext('2d');
+  const tex=new THREE.CanvasTexture(cv);
+  tex.anisotropy=renderer.capabilities.getMaxAnisotropy();
+  const geo=new THREE.PlaneGeometry(worldX1-worldX0,worldZ1-worldZ0);
+  const mat=new THREE.MeshBasicMaterial({map:tex,transparent:true,opacity:1,depthWrite:false,side:THREE.DoubleSide});
+  const mesh=new THREE.Mesh(geo,mat);
+  mesh.rotation.x=-Math.PI/2;
+  mesh.position.set((worldX0+worldX1)/2,worldY,(worldZ0+worldZ1)/2);
+  scene.add(mesh);
+  const GW=Math.ceil((worldX1-worldX0)/0.6)+1;
+  const GH=Math.ceil((worldZ1-worldZ0)/0.6)+1;
+  const gSX=(worldX1-worldX0)/(GW-1),gSZ=(worldZ1-worldZ0)/(GH-1);
+  let dens=new Float32Array(GW*GH),next=new Float32Array(GW*GH),sources=[];
+  function addSrc(x,z,str,rad){sources.push({x,z,str,rad});}
+  function clearSrc(){sources=[];}
+  function injectSources(){
+    sources.forEach(({x,z,str,rad})=>{
+      const ci=Math.round((x-worldX0)/gSX),ri=Math.round((z-worldZ0)/gSZ);
+      const pr=Math.ceil(rad/Math.max(gSX,gSZ));
+      for(let dc=-pr;dc<=pr;dc++) for(let dr=-pr;dr<=pr;dr++){
+        const gi=ci+dc,gj=ri+dr;
+        if(gi<0||gi>=GW||gj<0||gj>=GH) continue;
+        const fall=Math.exp(-((dc*gSX)**2+(dr*gSZ)**2)/(rad*rad*0.5));
+        dens[gi*GH+gj]=Math.min(1,dens[gi*GH+gj]+str*fall);
+      }
+    });
+  }
+  function diffuse(diff){
+    const a=diff*0.22;
+    for(let ci=0;ci<GW;ci++) for(let ri=0;ri<GH;ri++){
+      const idx=ci*GH+ri;
+      const n=ci>0?dens[(ci-1)*GH+ri]:0,s=ci<GW-1?dens[(ci+1)*GH+ri]:0;
+      const w=ri>0?dens[ci*GH+ri-1]:0,e=ri<GH-1?dens[ci*GH+ri+1]:0;
+      next[idx]=Math.max(0,Math.min(1,dens[idx]*(1-4*a)+(n+s+w+e)*a));
+    }
+    dens.set(next);
+  }
+  function decay(rate){for(let i=0;i<dens.length;i++)dens[i]=Math.max(0,dens[i]-rate);}
+  function render(){
+    ctx.clearRect(0,0,W,H);
+    for(let ci=0;ci<GW;ci++) for(let ri=0;ri<GH;ri++){
+      const h=dens[ci*GH+ri];
+      if(h<0.018) continue;
+      const px=(ci/(GW-1))*W,py=(ri/(GH-1))*H;
+      const br=Math.max(9,(W/GW)*3.2);
+      const alpha=0.10+h*0.84;
+      const grd=ctx.createRadialGradient(px,py,0,px,py,br);
+      grd.addColorStop(0,heatRGBA(h,alpha));
+      grd.addColorStop(0.55,heatRGBA(h,alpha*0.55));
+      grd.addColorStop(1,heatRGBA(h,0));
+      ctx.fillStyle=grd;ctx.beginPath();ctx.arc(px,py,br,0,Math.PI*2);ctx.fill();
+    }
+    tex.needsUpdate=true;
+  }
+  function avg(){let s=0;for(let i=0;i<dens.length;i++)s+=dens[i];return s/dens.length;}
+  return {addSrc,clearSrc,injectSources,diffuse,decay,render,avg};
+}
+
+function makeShaftLayer(worldX,worldZ0,worldZ1,worldY0,worldY1){
+  const RES=128,cv=document.createElement('canvas');
+  cv.width=RES;cv.height=RES;
+  const ctx=cv.getContext('2d'),tex=new THREE.CanvasTexture(cv);
+  const geo=new THREE.PlaneGeometry(worldZ1-worldZ0,worldY1-worldY0);
+  const mat=new THREE.MeshBasicMaterial({map:tex,transparent:true,opacity:1,depthWrite:false,side:THREE.DoubleSide});
+  const mesh=new THREE.Mesh(geo,mat);
+  mesh.rotation.y=Math.PI/2;
+  mesh.position.set(worldX,(worldY0+worldY1)/2,(worldZ0+worldZ1)/2);
+  scene.add(mesh);
+  const GW=16,GH=16;
+  let dens=new Float32Array(GW*GH),next=new Float32Array(GW*GH),_src=0;
+  function step(){
+    if(_src>0) for(let xi=0;xi<GW;xi++) dens[xi*GH+0]=Math.min(1,dens[xi*GH+0]+_src*0.4);
+    const a=0.18;
+    for(let xi=0;xi<GW;xi++) for(let yi=0;yi<GH;yi++){
+      const idx=xi*GH+yi;
+      const up=yi<GH-1?dens[xi*GH+yi+1]:0,dn=yi>0?dens[xi*GH+yi-1]:0;
+      const l=xi>0?dens[(xi-1)*GH+yi]:0,r=xi<GW-1?dens[(xi+1)*GH+yi]:0;
+      next[idx]=Math.max(0,Math.min(1,dens[idx]*(1-4*a)+up*a*1.7+dn*a*0.3+(l+r)*a));
+    }
+    dens.set(next);
+    for(let i=0;i<dens.length;i++)dens[i]=Math.max(0,dens[i]-0.02);
+  }
+  function render(){
+    ctx.clearRect(0,0,RES,RES);
+    for(let xi=0;xi<GW;xi++) for(let yi=0;yi<GH;yi++){
+      const h=dens[xi*GH+yi];
+      if(h<0.02) continue;
+      const px=(xi/(GW-1))*RES,py=RES-(yi/(GH-1))*RES,br=RES/GW*1.6;
+      const alpha=0.12+h*0.80;
+      const rv=255,gv=Math.round(160*(1-h)+40*h),bv=20;
+      const grd=ctx.createRadialGradient(px,py,0,px,py,br);
+      grd.addColorStop(0,`rgba(${rv},${gv},${bv},${alpha.toFixed(2)})`);
+      grd.addColorStop(1,`rgba(${rv},${gv},${bv},0)`);
+      ctx.fillStyle=grd;ctx.beginPath();ctx.arc(px,py,br,0,Math.PI*2);ctx.fill();
+    }
+    tex.needsUpdate=true;
+  }
+  return {step,render,set srcAmount(v){_src=v;}};
+}
+
+const L1F_12 = makeHeatLayer(-70,70,-11,-5, 0.63,512);
+const L1F_34 = makeHeatLayer(-70,70,  5,11, 0.63,512);
+const L2F    = makeHeatLayer(-70,70,-11,11, 6.70,512);
+const LExS   = makeHeatLayer(-55,-28,-11,-7,6.72,256);
+const LExN   = makeHeatLayer( 10, 40,-11,-7,6.72,256);
+
+// シャフト: 階段x=-20/-45/+35/+55, ESCx=-10/-45/+45/+55, ELVx=-15/+40
+// 視覚的シャフトは主要動線4本 × 2ホーム
+const VXPOS=[-20,-10,+35,+45,+55,-45]; // 縦動線X
+const VRATIO=[0.22,0.22,0.22,0.18,0.10,0.06];
+const shafts=[
+  makeShaftLayer(-20,-6,-1,0.5,6.8),  // ホーム12 階段A
+  makeShaftLayer(-10,-6,-1,0.5,6.8),  // ホーム12 ESC A
+  makeShaftLayer(+35,-6,-1,0.5,6.8),  // ホーム12 階段B
+  makeShaftLayer(+45,-6,-1,0.5,6.8),  // ホーム12 ESC B
+  makeShaftLayer(-20, 1, 6,0.5,6.8),  // ホーム34 階段A
+  makeShaftLayer(-10, 1, 6,0.5,6.8),  // ホーム34 ESC A
+  makeShaftLayer(+35, 1, 6,0.5,6.8),  // ホーム34 階段B
+  makeShaftLayer(+45, 1, 6,0.5,6.8),  // ホーム34 ESC B
+];
+
+let phase=0,ptimer=0;
+const phaseDur=[23,33,30,35,45];
+const phaseNames=['電車到着待ち','電車到着・降車','縦動線集中','改札口混雑','解消・退出'];
+const phaseTimes=['07:58','08:00','08:02','08:04','08:08'];
+const DOOR_XS=[-48,-32,-16,0,16,32,48];
+let flowL=0,flowR=0,flowE=0,flowV=0,flowExit=0;
+
+function inject(p){
+  const t=ptimer/phaseDur[p], sin1=Math.sin(t*Math.PI);
+  [L1F_12,L1F_34,L2F,LExS,LExN].forEach(l=>l.clearSrc());
+
+  // ── Phase0: 待機。各エリアに薄い分散 ──
+  if(p===0){
+    L1F_12.addSrc(0,-8,0.003,30); L1F_34.addSrc(0,8,0.003,30);
+    L2F.addSrc(-40,0,0.002,20);   L2F.addSrc(25,0,0.002,20);
+  }
+
+  // ── Phase1: 電車到着・ドア開放→ホームに降車 ──
+  if(p===1){
+    DOOR_XS.forEach(x=>{
+      L1F_12.addSrc(x,-5.5, 0.09+t*0.07, 6.5);  // ドアからホームへ広がる
+      L1F_34.addSrc(x,+5.5, 0.07+t*0.05, 6.5);
+    });
+    // ホーム中央への拡散
+    L1F_12.addSrc(0,-8, 0.02*t, 18);
+    L1F_34.addSrc(0,+8, 0.015*t, 18);
+  }
+
+  // ── Phase2: ホーム→縦動線（階段/ESC/ELV）→コンコース ──
+  if(p===2){
+    const str=sin1;
+    VXPOS.forEach((vx,i)=>{
+      const r=VRATIO[i];
+      // 1F: ホームから縦動線に向けて収束
+      L1F_12.addSrc(vx,-6, r*str*0.13, 7);
+      L1F_34.addSrc(vx,+6, r*str*0.10, 7);
+      // シャフト点灯
+      if(i<4) shafts[i].srcAmount=r*str*0.28;
+      if(i<4) shafts[4+i].srcAmount=r*str*0.22;
+      // 2F: シャフト出口からコンコースへ広がる
+      L2F.addSrc(vx,-1.5, r*str*0.11, 8);
+      L2F.addSrc(vx,+1.5, r*str*0.09, 8);
+    });
+    flowL=VRATIO[0]*sin1; flowR=VRATIO[2]*sin1;
+    flowE=VRATIO[1]*sin1; flowV=0.06*sin1;
+  } else {
+    shafts.forEach(s=>{s.srcAmount=0;});
+    if(p!==2){flowL=flowR=flowE=flowV=0;}
+  }
+
+  // ── Phase3: コンコース→改札口に集中 ──
+  if(p===3){
+    // 南改札(x=-40)と北改札(x=+25)に向けて人流が収束
+    L2F.addSrc(-40,0, 0.13+sin1*0.06, 10);
+    L2F.addSrc(+25,0, 0.10+sin1*0.05, 9);
+    // コンコース全体にも残留人流
+    VXPOS.slice(0,4).forEach((vx,i)=>{
+      L2F.addSrc(vx,0, VRATIO[i]*sin1*0.06, 9);
+    });
+    // t後半: 改札通過→出口方向へ流れ始める
+    const fs=Math.max(0,t-0.28)*1.6;
+    if(fs>0){
+      // 南改札→南口(z=-11方向)
+      [[-40,0],[-40,-3.5],[-40,-7],[-40,-10]].forEach(([fx,fz],i)=>{
+        L2F.addSrc(fx,fz, fs*0.09*(1-i*0.18), 8-i*0.5);
+      });
+      LExS.addSrc(-40,-9, fs*0.07, 5.5);
+      // 北改札→北口
+      [[25,0],[25,-3.5],[25,-7],[25,-10]].forEach(([fx,fz],i)=>{
+        L2F.addSrc(fx,fz, fs*0.07*(1-i*0.18), 7-i*0.5);
+      });
+      LExN.addSrc(25,-9, fs*0.05, 5.5);
+    }
+    flowExit=fs*0.5;
+  }
+
+  // ── Phase4: 出口へ解消 ──
+  if(p===4){
+    // 南口方向フル流量
+    [[-40,0],[-40,-3],[-40,-6],[-40,-9],[-40,-10.5]].forEach(([fx,fz],i)=>{
+      L2F.addSrc(fx,fz, 0.10*(1-i*0.14), 8-i*0.4);
+    });
+    LExS.addSrc(-40,-8,0.15,9); LExS.addSrc(-38,-10.5,0.08,5); LExS.addSrc(-42,-10.5,0.06,4);
+    // 北口方向
+    [[25,0],[25,-3],[25,-6],[25,-9],[25,-10.5]].forEach(([fx,fz],i)=>{
+      L2F.addSrc(fx,fz, 0.08*(1-i*0.14), 7-i*0.4);
+    });
+    LExN.addSrc(25,-8,0.10,9); LExN.addSrc(23,-10.5,0.05,5); LExN.addSrc(27,-10.5,0.04,4);
+    flowExit=0.9-t*0.85;
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  TRAIN ANIMATION（2本）
+// ═══════════════════════════════════════════════
+let trainX=160,trainDocked=false,trainDepart=false,trainDelay=0;
+let train2X=160,train2Docked=false,train2Depart=false,train2Delay=0;
+
+// ═══════════════════════════════════════════════
+//  UI helpers
+// ═══════════════════════════════════════════════
+function toStr(v){ return Math.round(Math.min(100,v*180))+'%'; }
+function toPct(v){ return Math.min(100,v*180); }
+
+// ═══════════════════════════════════════════════
+//  MAIN LOOP
+// ═══════════════════════════════════════════════
+let frame=0;
+function animate(){
+  requestAnimationFrame(animate);
+  frame++;
+  ptimer++;
+  if(ptimer>=phaseDur[phase]){
+    ptimer=0; phase=(phase+1)%5;
+    if(phase===0){
+      trainX=-160; trainDocked=false; trainDepart=false; trainDelay=0; trainGroup.position.x=-160;
+      train2X=160; train2Docked=false; train2Depart=false; train2Delay=0; trainGroup2.position.x=160;
+    }
+  }
+
+  inject(phase);
+  [L1F_12,L1F_34,L2F,LExS,LExN].forEach(l=>l.injectSources());
+
+  const decayRate={0:0.012,1:0.005,2:0.014,3:0.006,4:0.015};
+  L1F_12.diffuse(0.12); L1F_12.decay(decayRate[phase]); L1F_12.render();
+  L1F_34.diffuse(0.12); L1F_34.decay(decayRate[phase]); L1F_34.render();
+  L2F.diffuse(0.12);    L2F.decay(decayRate[phase]);    L2F.render();
+  LExS.diffuse(0.10);   LExS.decay(phase===4?0.008:0.018); LExS.render();
+  LExN.diffuse(0.10);   LExN.decay(phase===4?0.008:0.018); LExN.render();
+  shafts.forEach(sh=>{sh.step();sh.render();});
+
+  // 山手線: 西→東（+x方向）
+  if(phase>=1&&!trainDocked){ trainX=Math.min(0,trainX+1.5); trainGroup.position.x=trainX; if(trainX>=0)trainDocked=true; }
+  if(phase>=3&&trainDocked&&!trainDepart){ trainDelay++; if(trainDelay>45)trainDepart=true; }
+  if(trainDepart){ trainGroup.position.x+=1.8; if(trainGroup.position.x>200)trainDepart=false; }
+
+  // 京浜東北: 東→西（-x方向）
+  if(phase>=1&&!train2Docked){ train2X=Math.max(0,train2X-1.2); trainGroup2.position.x=train2X; if(train2X<=0)train2Docked=true; }
+  if(phase>=3&&train2Docked&&!train2Depart){ train2Delay++; if(train2Delay>60)train2Depart=true; }
+  if(train2Depart){ trainGroup2.position.x-=1.5; if(trainGroup2.position.x<-200)train2Depart=false; }
+
+  elvLight1.intensity=0.6+Math.sin(frame*0.05)*0.35;
+  elvLight2.intensity=0.6+Math.sin(frame*0.05+1)*0.35;
+  exitLights.forEach((l,i)=>{ l.intensity=1.4+Math.sin(frame*0.07+i)*0.3; });
+
+  const c1=toPct((L1F_12.avg()+L1F_34.avg())*0.5);
+  const c2=toPct(L2F.avg());
+  const cE=toPct(flowExit*0.6);
+  document.getElementById('fill1').style.width=c1+'%';
+  document.getElementById('fill2').style.width=c2+'%';
+  document.getElementById('fillE').style.width=cE+'%';
+  document.getElementById('pct1').textContent=Math.round(c1)+'%';
+  document.getElementById('pct2').textContent=Math.round(c2)+'%';
+  document.getElementById('pctE').textContent=Math.round(cE)+'%';
+
+  const mk=(v)=>{const h=v/100;const r=Math.round(h*210);return`linear-gradient(90deg,#4a90e2,rgb(${r},${Math.round(80*(1-h))},${Math.round(200*(1-h))}))`};
+  document.getElementById('fill1').style.background=mk(c1);
+  document.getElementById('fill2').style.background=mk(c2);
+
+  const tot=flowL+flowR+flowE+flowV;
+  const s=tot>0?Math.min(100,tot*140):0;
+  document.getElementById('fb-stairL').style.width=(s*(flowL/(tot+1e-9)))+'%';
+  document.getElementById('fb-stairR').style.width=(s*(flowR/(tot+1e-9)))+'%';
+  document.getElementById('fb-esc').style.width=(s*(flowE/(tot+1e-9)))+'%';
+  document.getElementById('fb-elv').style.width=(s*(flowV/(tot+1e-9))*0.5)+'%';
+
+  document.getElementById('clock').textContent=phaseTimes[phase];
+  document.getElementById('phase-badge').textContent=`PHASE ${phase} / ${phaseNames[phase]}`;
+  for(let i=0;i<5;i++) document.getElementById('tlp'+i).classList.toggle('active',i===phase);
+
+  renderer.render(scene,cam);
+}
+animate();
+</script>
+</body>
+</html>
