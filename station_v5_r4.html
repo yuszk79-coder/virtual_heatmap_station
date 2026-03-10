@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>仮想駅 流体ヒートマップ v5</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Noto+Sans+JP:wght@300;400&display=swap');
+
+:root {
+  --bg: #f4f6f9;
+  --panel-bg: rgba(255,255,255,0.92);
+  --border: rgba(30,80,180,0.15);
+  --accent: #1e50b4;
+  --accent2: #e8320a;
+  --text-main: #1a2a4a;
+  --text-sub: #7a8eaa;
+  --shadow: 0 2px 20px rgba(30,80,180,0.10);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); overflow:hidden; font-family:'DM Mono','Noto Sans JP',monospace; }
+canvas { display:block; }
+
+/* ── TOP BAR ── */
+#topbar {
+  position:fixed; top:0; left:0; right:0;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:13px 28px;
+  background:rgba(244,246,249,0.96);
+  border-bottom:1px solid var(--border);
+  backdrop-filter:blur(10px); z-index:10;
+  box-shadow: 0 1px 12px rgba(30,80,180,0.07);
+}
+.title { font-size:11px; letter-spacing:4px; color:var(--accent); font-weight:500; text-transform:uppercase; }
+#clock { font-size:30px; color:var(--text-main); letter-spacing:3px; font-weight:300; }
+#phase-badge {
+  font-size:11px; letter-spacing:2px; padding:6px 14px;
+  border:1.5px solid var(--accent2); background:rgba(232,50,10,0.06);
+  color:var(--accent2); border-radius:4px; font-weight:500;
+}
+
+/* ── PANELS ── */
+.panel {
+  position:fixed; background:var(--panel-bg); border:1px solid var(--border);
+  border-radius:8px; padding:16px 18px; backdrop-filter:blur(12px);
+  z-index:10; box-shadow:var(--shadow);
+}
+#left-panel { left:20px; top:72px; width:220px; }
+#right-panel { right:20px; top:72px; width:200px; }
+#flow-panel  { left:20px; bottom:72px; width:220px; }
+
+.panel h3 { font-size:10px; letter-spacing:3px; color:var(--accent); margin-bottom:13px; opacity:0.75; font-weight:500; }
+.floor-row { margin-bottom:12px; }
+.floor-row .fl { font-size:10px; letter-spacing:1.5px; color:var(--text-sub); margin-bottom:5px; display:flex; justify-content:space-between; }
+.floor-row .fl span { color:var(--text-main); font-weight:500; }
+.meter-bg { height:5px; background:rgba(30,80,180,0.08); border-radius:3px; overflow:hidden; }
+.meter-fill { height:100%; border-radius:3px; transition:width 0.4s ease; background:linear-gradient(90deg,#4a90e2,#e8320a); }
+.divider { border:none; border-top:1px solid var(--border); margin:11px 0; }
+.legend-title { font-size:10px; letter-spacing:2px; color:var(--text-sub); margin-bottom:7px; }
+.legend-grad { height:7px; border-radius:4px; margin-bottom:4px;
+  background:linear-gradient(90deg,#2196f3,#00bcd4,#4caf50,#ffeb3b,#ff9800,#f44336); }
+.legend-lbl { display:flex; justify-content:space-between; font-size:9px; color:var(--text-sub); }
+
+.struct-item { display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:10px; color:var(--text-sub); letter-spacing:1px; }
+.dot { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+.ratio { margin-left:auto; color:var(--accent); font-size:9px; font-weight:500; }
+
+.flow-row { display:flex; align-items:center; gap:6px; margin-bottom:8px; font-size:10px; color:var(--text-sub); }
+.flow-row span { width:76px; flex-shrink:0; }
+.flow-bar-bg { flex:1; height:4px; background:rgba(30,80,180,0.08); border-radius:2px; overflow:hidden; }
+.flow-bar { height:100%; border-radius:2px; transition:width 0.5s ease; }
+
+/* ── TIMELINE ── */
+#timeline {
+  position:fixed; bottom:18px; left:50%; transform:translateX(-50%);
+  display:flex; background:var(--panel-bg); border:1px solid var(--border);
+  border-radius:8px; overflow:hidden; backdrop-filter:blur(12px);
+  z-index:10; box-shadow:var(--shadow);
+}
+.tl-phase { padding:9px 16px; font-size:10px; letter-spacing:2px; color:var(--text-sub);
+  border-right:1px solid var(--border); transition:all 0.3s; text-align:center; line-height:1.7; }
+.tl-phase:last-child { border-right:none; }
+.tl-phase.active { background:rgba(30,80,180,0.07); color:var(--accent); }
+.tl-phase .tl-time { display:block; font-size:9px; color:var(--accent); margin-bottom:1px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="topbar">
+  <div class="title">🚉 VIRTUAL STATION — CROWD FLOW</div>
+  <div id="clock">07:58</div>
+  <div id="phase-badge">PHASE 0 / 電車到着待ち</div>
+</div>
+
+<div class="panel" id="left-panel">
+  <h3>CONGESTION</h3>
+  <div class="floor-row">
+    <div class="fl">1F PLATFORM <span id="pct1">0%</span></div>
+    <div class="meter-bg"><div class="meter-fill" id="fill1" style="width:0%"></div></div>
+  </div>
+  <div class="floor-row">
+    <div class="fl">2F CONCOURSE <span id="pct2">0%</span></div>
+    <div class="meter-bg"><div class="meter-fill" id="fill2" style="width:0%"></div></div>
+  </div>
+  <div class="floor-row">
+    <div class="fl">EXIT FLOW <span id="pctE">0%</span></div>
+    <div class="meter-bg"><div class="meter-fill" id="fillE" style="width:0%;background:linear-gradient(90deg,#26a69a,#00e5ff)"></div></div>
+  </div>
+  <hr class="divider">
+  <div class="legend-title">HEATMAP</div>
+  <div class="legend-grad"></div>
+  <div class="legend-lbl"><span>低密度</span><span>高密度</span></div>
+</div>
+
+<div class="panel" id="right-panel">
+  <h3>FLOW RATIO</h3>
+  <div class="struct-item"><div class="dot" style="background:#607d8b"></div>階段 A (西)<span class="ratio">3/10</span></div>
+  <div class="struct-item"><div class="dot" style="background:#607d8b"></div>階段 B (東)<span class="ratio">3/10</span></div>
+  <div class="struct-item"><div class="dot" style="background:#00bfa5"></div>エスカレーター<span class="ratio">3/10</span></div>
+  <div class="struct-item"><div class="dot" style="background:#9c27b0"></div>エレベーター<span class="ratio">1/10</span></div>
+  <hr class="divider">
+  <h3 style="margin-bottom:10px">STRUCTURE</h3>
+  <div class="struct-item"><div class="dot" style="background:#1565c0"></div>電車</div>
+  <div class="struct-item"><div class="dot" style="background:#e8320a"></div>改札 ×2</div>
+  <div class="struct-item"><div class="dot" style="background:#00897b"></div>出口 A / B</div>
+  <div class="struct-item"><div class="dot" style="background:#f9a825"></div>キオスク ×1</div>
+</div>
+
+<div class="panel" id="flow-panel">
+  <h3>VERTICAL FLOW</h3>
+  <div class="flow-row"><span>階段 A (西)</span><div class="flow-bar-bg"><div class="flow-bar" id="fb-stairL" style="background:#607d8b"></div></div></div>
+  <div class="flow-row"><span>階段 B (東)</span><div class="flow-bar-bg"><div class="flow-bar" id="fb-stairR" style="background:#607d8b"></div></div></div>
+  <div class="flow-row"><span>エスカレーター</span><div class="flow-bar-bg"><div class="flow-bar" id="fb-esc" style="background:#00bfa5"></div></div></div>
+  <div class="flow-row"><span>エレベーター</span><div class="flow-bar-bg"><div class="flow-bar" id="fb-elv" style="background:#9c27b0"></div></div></div>
+</div>
+
+<div id="timeline">
+  <div class="tl-phase active" id="tlp0"><span class="tl-time">07:58</span>待機</div>
+  <div class="tl-phase" id="tlp1"><span class="tl-time">08:00</span>到着・降車</div>
+  <div class="tl-phase" id="tlp2"><span class="tl-time">08:02</span>縦移動</div>
+  <div class="tl-phase" id="tlp3"><span class="tl-time">08:04</span>改札混雑</div>
+  <div class="tl-phase" id="tlp4"><span class="tl-time">08:08</span>解消・退出</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ═══════════════════════════════════════════════
+//  RENDERER
+// ═══════════════════════════════════════════════
+const canvas = document.getElementById('c');
+const W = window.innerWidth, H = window.innerHeight;
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+renderer.setSize(W,H);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.sortObjects = true;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf4f6f9);
+scene.fog = new THREE.Fog(0xf4f6f9, 100, 190);
+
+const cam = new THREE.PerspectiveCamera(42, W/H, 0.1, 300);
+cam.position.set(55, 40, 55);
+cam.lookAt(0, 4, 0);
+
+// ═══════════════════════════════════════════════
+//  LIGHTS  (brighter for white bg)
+// ═══════════════════════════════════════════════
+scene.add(new THREE.AmbientLight(0xffffff, 1.8));
+const dir = new THREE.DirectionalLight(0xffffff, 0.7);
+dir.position.set(30,50,30); scene.add(dir);
+const dir2 = new THREE.DirectionalLight(0xddeeff, 0.3);
+dir2.position.set(-20,30,-10); scene.add(dir2);
+
+// ═══════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════
+function mkBox(w,h,d,color,opacity=1){
+  return new THREE.Mesh(
+    new THREE.BoxGeometry(w,h,d),
+    new THREE.MeshPhongMaterial({color,opacity,transparent:opacity<1,
+      depthWrite:opacity>0.55,shininess:30,side:THREE.DoubleSide})
+  );
+}
+function pl(m){ scene.add(m); return m; }
+function addEdge(mesh,col=0x3a6abf,op=0.3){
+  const e = new THREE.LineSegments(
+    new THREE.EdgesGeometry(mesh.geometry),
+    new THREE.LineBasicMaterial({color:col,opacity:op,transparent:true})
+  );
+  e.position.copy(mesh.position);
+  e.rotation.copy(mesh.rotation);
+  e.scale.copy(mesh.scale);
+  scene.add(e);
+}
+
+// ═══════════════════════════════════════════════
+//  STRUCTURE
+// ═══════════════════════════════════════════════
+
+// 1F Platform
+const pf=mkBox(50,0.3,16,0xdce8f5,0.6); pf.position.set(0,0.15,0); pl(pf); addEdge(pf,0x5a82c0,0.4);
+[-6.5,6.5].forEach(z=>{ const e=mkBox(50,0.12,0.25,0xffc400,1.0); e.position.set(0,0.35,z); pl(e); });
+[-8.1,8.1].forEach(z=>{
+  [-0.5,0.5].forEach(dz=>{ const r=mkBox(50,0.08,0.12,0x8a9eaa,0.9); r.position.set(0,0.05,z+dz); pl(r); });
+  for(let x=-23;x<=23;x+=1.8){ const t=mkBox(0.15,0.06,2.2,0xaabbcc,0.6); t.position.set(x,0.03,z); pl(t); }
+});
+
+// 2F Concourse — opaque enough to distinguish
+const f2=mkBox(50,0.4,18,0xbfd0ea,0.78); f2.position.set(0,6.2,0); pl(f2); addEdge(f2,0x4a72b8,0.55);
+for(let x=-22;x<=22;x+=8){ const s=mkBox(0.08,0.02,18,0xa0b8d8,0.5); s.position.set(x,6.42,0); pl(s); }
+
+// Columns — invisible
+// [[-20,-7],...].forEach(...) removed
+
+// Roof — invisible
+{ const roof=mkBox(51,0.25,21,0xccd8e8,0); roof.position.set(0,12.65,0); roof.visible=false; scene.add(roof); }
+// Roof trusses — invisible
+// Side walls — invisible
+
+// Stairs
+function addStairs(px,pz){
+  for(let i=0;i<8;i++){ const s=mkBox(3,0.22,0.65,0x90a8c0,0.8); s.position.set(px,0.3+i*0.75,pz-i*0.65); pl(s); }
+  [-1.4,1.4].forEach(dx=>{
+    const pts=[new THREE.Vector3(px+dx,0.5,pz),new THREE.Vector3(px+dx,6.3,pz-5.2)];
+    pl(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({color:0x7090b0,opacity:0.8,transparent:true})));
+  });
+}
+addStairs(-22,4.2);
+addStairs(22,4.2);
+
+// Escalator
+const escX=-10, escZ=2.8;
+for(let i=0;i<8;i++){ const s=mkBox(2.2,0.18,0.6,0x00bfa5,0.92); s.position.set(escX,0.35+i*0.77,escZ-i*0.62); pl(s); }
+[-1.15,1.15].forEach(dz=>{ const s=mkBox(0.1,6.2,5.5,0x00bfa5,0.32); s.position.set(escX,3.4,escZ-2.2+dz); pl(s); });
+
+// Elevator
+const elvX=19, elvZ=2.8;
+const elvS=mkBox(2.2,6.7,2.2,0x9c27b0,0.22); elvS.position.set(elvX,3.35,elvZ); pl(elvS); addEdge(elvS,0xce93d8,0.55);
+const elvD=mkBox(1.5,5,0.1,0xba68c8,0.5); elvD.position.set(elvX,3.2,elvZ+1.15); pl(elvD);
+const elvLight=new THREE.PointLight(0x9c27b0,0.8,10); elvLight.position.set(elvX,7,elvZ); scene.add(elvLight);
+
+// ── GATES ×2  (changed from 3 → 2, at x=-8 and x=+8) ──
+const gateXs=[-8, 8];
+gateXs.forEach(x=>{
+  const strip=mkBox(3.5,0.08,1.5,0xe8320a,0.95); strip.position.set(x,6.46,0); pl(strip);
+  [-1,1].forEach(dx=>{ const p=mkBox(0.3,2.2,0.3,0xe8320a,1.0); p.position.set(x+dx,7.5,0); pl(p); });
+  const arm=mkBox(2.2,0.1,0.1,0xe8320a,0.95); arm.position.set(x,8.8,0); pl(arm);
+  const halo=mkBox(2.6,2.8,0.05,0xe8320a,0.1); halo.position.set(x,7.8,0.1); pl(halo);
+  const sign=mkBox(2.0,0.5,0.08,0xe8320a,0.9); sign.position.set(x,9.4,0); pl(sign);
+  const gl=new THREE.PointLight(0xe8320a,1.2,7); gl.position.set(x,9,0); scene.add(gl);
+  const arrow=mkBox(1.0,0.04,3.0,0xe8320a,0.45); arrow.position.set(x,6.45,3.5); pl(arrow);
+});
+
+// ── KIOSK — midpoint between exits A(x=-22) and B(x=+22) → x=0 ──
+const kx=0, kz=-6;
+const k=mkBox(4,2.2,2.8,0x3d3020,0.7); k.position.set(kx,7.6,kz); pl(k); addEdge(k,0xf9a825,0.5);
+const ks=mkBox(4.1,0.38,0.12,0xf9a825,0.95); ks.position.set(kx,8.9,kz+1.3); pl(ks);
+const kl=new THREE.PointLight(0xf9a825,1.2,9); kl.position.set(kx,9.5,kz+0.5); scene.add(kl);
+
+// ── EXITS A & B ──
+const exitDefs=[{x:-22,col:0x00897b},{x:22,col:0x00897b}];
+const exitLights=[];
+exitDefs.forEach(({x,col})=>{
+  const fr=mkBox(4.2,4.5,0.25,0xe8f5f3,0.85); fr.position.set(x,8.7,-8.9); pl(fr); addEdge(fr,col,0.8);
+  const door=mkBox(3.2,3.8,0.1,col,0.18); door.position.set(x,8.6,-8.85); pl(door);
+  const thr=mkBox(3.5,0.06,0.8,col,0.9); thr.position.set(x,6.44,-8.6); pl(thr);
+  [-7.5,-6.2].forEach(z=>{ const ar=mkBox(3.0,0.05,0.8,col,0.45); ar.position.set(x,6.45,z); pl(ar); });
+  const sig=mkBox(3.0,0.6,0.1,col,0.8); sig.position.set(x,10.0,-8.85); pl(sig);
+  const el=new THREE.PointLight(col,1.6,10); el.position.set(x,9,-8.5); scene.add(el);
+  exitLights.push(el);
+});
+
+// ── TRAIN ──
+const trainGroup=new THREE.Group();
+const tbody=mkBox(46,3.1,4.8,0x1565c0,0.8); tbody.position.set(0,1.85,-8); trainGroup.add(tbody);
+for(let x=-22;x<=22;x+=2.8){ const w=mkBox(1.7,1.1,0.1,0x90caf9,0.65); w.position.set(x,2.2,-5.62); trainGroup.add(w); }
+[-16,-8,0,8,16].forEach(x=>{ const d=mkBox(1.4,2.7,0.08,0x0d47a1,0.85); d.position.set(x,1.85,-5.62); trainGroup.add(d); });
+pl(mkBox(46,0.5,5,0x0d47a1,0.9)).position.set(0,0.44,-8);
+trainGroup.position.x=65; scene.add(trainGroup);
+
+// ═══════════════════════════════════════════════
+//  FLUID HEATMAP ENGINE
+//  Each cell stores a float density [0..1].
+//  Per frame: advect (move mass along velocity field)
+//             diffuse (spread to neighbors — gives fluid blob look)
+//             add sources per phase
+// ═══════════════════════════════════════════════
+const STEP=0.95;
+
+// Perlin-like smooth noise for organic advection
+function fade(t){return t*t*t*(t*(t*6-15)+10);}
+function lerp3(a,b,t){return a+(b-a)*t;}
+const P=new Uint8Array(512);
+const _p=[...Array(256).keys()];
+for(let i=255;i>0;i--){const j=Math.floor(Math.random()*(i+1));[_p[i],_p[j]]=[_p[j],_p[i]];}
+for(let i=0;i<512;i++) P[i]=_p[i&255];
+function grad(hash,x,y){const h=hash&3;const u=h<2?x:y,v=h<2?y:x;return((h&1)?-u:u)+((h&2)?-v:v);}
+function noise2(x,y){
+  const X=Math.floor(x)&255,Y=Math.floor(y)&255;
+  x-=Math.floor(x);y-=Math.floor(y);
+  const u=fade(x),v=fade(y);
+  const a=P[X]+Y,aa=P[a],ab=P[a+1],b=P[X+1]+Y,ba=P[b],bb=P[b+1];
+  return lerp3(lerp3(grad(P[aa],x,y),grad(P[ba],x-1,y),u),lerp3(grad(P[ab],x,y-1),grad(P[bb],x-1,y-1),u),v);
+}
+
+// ─ Grid definition ─
+function makeGrid(xs,xe,zs,ze){
+  const cols=[], rows=[], cells=[];
+  for(let x=xs;x<=xe;x+=STEP) cols.push(x);
+  for(let z=zs;z<=ze;z+=STEP) rows.push(z);
+  const nc=cols.length, nr=rows.length;
+  const dens=new Float32Array(nc*nr);
+  const next=new Float32Array(nc*nr);
+  return {cols,rows,nc,nr,dens,next,cells};
+}
+
+// Build tile meshes for a grid
+function buildTiles(grid,y,rotX=-Math.PI/2){
+  const {cols,rows,nc,nr}=grid;
+  grid.meshes=[];
+  for(let ci=0;ci<nc;ci++){
+    for(let ri=0;ri<nr;ri++){
+      const geo=new THREE.PlaneGeometry(STEP+0.04,STEP+0.04);
+      const mat=new THREE.MeshBasicMaterial({color:0x2196f3,opacity:0,transparent:true,depthWrite:false,side:THREE.DoubleSide});
+      const m=new THREE.Mesh(geo,mat);
+      m.rotation.x=rotX;
+      m.position.set(cols[ci],y,rows[ri]);
+      m.visible=false;
+      scene.add(m);
+      grid.meshes.push(m);
+    }
+  }
+}
+
+// Vertical grid (flat plane facing camera side)
+function buildVertTiles(grid,xVal,y0,y1,zs,ze){
+  const ys=[], zs2=[];
+  for(let y=y0;y<=y1;y+=STEP) ys.push(y);
+  for(let z=zs;z<=ze;z+=STEP) zs2.push(z);
+  const nc=ys.length,nr=zs2.length;
+  const dens=new Float32Array(nc*nr);
+  const next=new Float32Array(nc*nr);
+  grid.cols=ys; grid.rows=zs2; grid.nc=nc; grid.nr=nr;
+  grid.dens=dens; grid.next=next; grid.meshes=[];
+  for(let ci=0;ci<nc;ci++){
+    for(let ri=0;ri<nr;ri++){
+      const geo=new THREE.PlaneGeometry(STEP+0.04,STEP+0.04);
+      const mat=new THREE.MeshBasicMaterial({color:0x2196f3,opacity:0,transparent:true,depthWrite:false,side:THREE.DoubleSide});
+      const m=new THREE.Mesh(geo,mat);
+      // orient to face the isometric view
+      m.rotation.y=Math.PI/2;
+      m.position.set(xVal,ys[ci],zs2[ri]);
+      m.visible=false;
+      scene.add(m);
+      grid.meshes.push(m);
+    }
+  }
+}
+
+// grids
+const g1F=makeGrid(-24,24,-7.5,7.5);    buildTiles(g1F,0.62);
+const g2F=makeGrid(-24,24,-8.5,8.5);    buildTiles(g2F,6.68);
+const gExA=makeGrid(-26,-17,-8.5,0.5);  buildTiles(gExA,6.70);
+const gExB=makeGrid(17,26,-8.5,0.5);    buildTiles(gExB,6.70);
+
+// vertical shafts — store as simple objects
+const vShafts=[
+  {x:-22,grid:makeGrid(-24,-20,-0.5,5.5)},
+  {x: 22,grid:makeGrid(20,24,-0.5,5.5)},
+  {x:escX,grid:makeGrid(-12,-8,0.5,4.5)},
+  {x:elvX,grid:makeGrid(17,21,1.5,4.0)},
+];
+vShafts.forEach(sh=>{
+  // rebuild as vertical (xz plane, horizontal step in x-z, height in y)
+  const xs=[], zs2=[], ys=[];
+  for(let y=0.5;y<=6.5;y+=STEP) ys.push(y);
+  for(let z=0;z<=5;z+=STEP) zs2.push(z);
+  sh.ys=ys; sh.zs=zs2;
+  sh.meshes=[];
+  sh.dens=new Float32Array(ys.length*zs2.length);
+  sh.next=new Float32Array(ys.length*zs2.length);
+  for(let yi=0;yi<ys.length;yi++){
+    for(let zi=0;zi<zs2.length;zi++){
+      const geo=new THREE.PlaneGeometry(STEP+0.04,STEP+0.04);
+      const mat=new THREE.MeshBasicMaterial({color:0x00bfa5,opacity:0,transparent:true,depthWrite:false,side:THREE.DoubleSide});
+      const m=new THREE.Mesh(geo,mat);
+      m.rotation.y=0; // face Z
+      m.position.set(sh.x,ys[yi],4.2-zs2[zi]*0.55);
+      m.visible=false;
+      scene.add(m);
+      sh.meshes.push(m);
+    }
+  }
+});
+
+// ─ Fluid step functions ─
+function addSource(grid,x,z,amount,radius){
+  const {cols,rows,nc,nr,dens}=grid;
+  for(let ci=0;ci<nc;ci++){
+    for(let ri=0;ri<nr;ri++){
+      const dx=cols[ci]-x, dz=rows[ri]-z;
+      const d2=dx*dx+dz*dz;
+      const r2=radius*radius;
+      if(d2<r2){
+        const falloff=Math.exp(-d2/(r2*0.45));
+        dens[ci*nr+ri]=Math.min(1,dens[ci*nr+ri]+amount*falloff);
+      }
+    }
+  }
+}
+
+function diffuseGrid(grid, diff){
+  const {nc,nr,dens,next}=grid;
+  const a=diff*0.25;
+  for(let ci=0;ci<nc;ci++){
+    for(let ri=0;ri<nr;ri++){
+      const idx=ci*nr+ri;
+      const n=ci>0?dens[(ci-1)*nr+ri]:0;
+      const s=ci<nc-1?dens[(ci+1)*nr+ri]:0;
+      const w=ri>0?dens[ci*nr+ri-1]:0;
+      const e=ri<nr-1?dens[ci*nr+ri+1]:0;
+      // weighted average with organic noise perturbation
+      const noise=noise2(ci*0.18+frame*0.004, ri*0.18+frame*0.004)*0.012;
+      next[idx]=Math.max(0,Math.min(1, dens[idx]*(1-4*a) + (n+s+w+e)*a + noise));
+    }
+  }
+  grid.dens.set(next);
+}
+
+function decayGrid(grid, rate){
+  const {dens}=grid;
+  for(let i=0;i<dens.length;i++) dens[i]=Math.max(0,dens[i]-rate);
+}
+
+function renderGrid(grid, colorFn){
+  const {nc,nr,dens,meshes}=grid;
+  for(let i=0;i<meshes.length;i++){
+    const h=dens[i];
+    if(h<0.02){meshes[i].visible=false;continue;}
+    meshes[i].visible=true;
+    const c=colorFn(h);
+    meshes[i].material.color=c;
+    meshes[i].material.opacity=0.06+h*0.78;
+  }
+}
+
+function heatColor(h){
+  const stops=[
+    [0,   [0.13,0.59,0.95]],
+    [0.25,[0,   0.74,0.83]],
+    [0.5, [0.30,0.85,0.50]],
+    [0.7, [1.0, 0.92,0.23]],
+    [0.85,[1.0, 0.60,0.10]],
+    [1.0, [0.96,0.26,0.21]],
+  ];
+  let lo=stops[0],hi=stops[stops.length-1];
+  for(let i=0;i<stops.length-1;i++){
+    if(h>=stops[i][0]&&h<=stops[i+1][0]){lo=stops[i];hi=stops[i+1];break;}
+  }
+  const t=(h-lo[0])/(hi[0]-lo[0]+1e-9);
+  return new THREE.Color(
+    lo[1][0]+(hi[1][0]-lo[1][0])*t,
+    lo[1][1]+(hi[1][1]-lo[1][1])*t,
+    lo[1][2]+(hi[1][2]-lo[1][2])*t
+  );
+}
+
+// shaft color (warm orange→purple for vertical)
+function shaftColor(h){
+  return new THREE.Color().lerpColors(
+    new THREE.Color(0xff9800),
+    new THREE.Color(0x9c27b0),
+    h
+  );
+}
+function exitColor(h){
+  return new THREE.Color().lerpColors(
+    new THREE.Color(0x26c6da),
+    new THREE.Color(0x00897b),
+    h
+  );
+}
+
+// ─ Shaft update ─
+function updateShaft(sh, amount){
+  const {ys,zs,dens,next,meshes}=sh;
+  const nY=ys.length, nZ=sh.zs.length;
+  // add source at bottom
+  if(amount>0){
+    for(let zi=0;zi<nZ;zi++){
+      dens[0*nZ+zi]=Math.min(1,dens[0*nZ+zi]+amount*0.3);
+    }
+  }
+  // advect upward + diffuse
+  const a=0.18;
+  for(let yi=0;yi<nY;yi++){
+    for(let zi=0;zi<nZ;zi++){
+      const idx=yi*nZ+zi;
+      const up  =yi>0    ?dens[(yi-1)*nZ+zi]:0;
+      const down=yi<nY-1 ?dens[(yi+1)*nZ+zi]:0;
+      const l   =zi>0    ?dens[yi*nZ+zi-1]:0;
+      const r   =zi<nZ-1 ?dens[yi*nZ+zi+1]:0;
+      const noise=noise2(yi*0.25+frame*0.008,zi*0.25)*0.015;
+      // upward bias: down contributes more than up
+      next[idx]=Math.max(0,Math.min(1, dens[idx]*(1-4*a)+down*a*1.6+up*a*0.4+(l+r)*a+noise));
+    }
+  }
+  sh.dens.set(next);
+  // decay
+  for(let i=0;i<sh.dens.length;i++) sh.dens[i]=Math.max(0,sh.dens[i]-0.018);
+  // render
+  for(let i=0;i<meshes.length;i++){
+    const h=sh.dens[i];
+    if(h<0.02){meshes[i].visible=false;continue;}
+    meshes[i].visible=true;
+    meshes[i].material.color=shaftColor(h);
+    meshes[i].material.opacity=0.05+h*0.75;
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  PHASE SYSTEM
+// ═══════════════════════════════════════════════
+let phase=0, ptimer=0;
+const phaseDur=[45,65,60,70,90];
+const phaseNames=['電車到着待ち','電車到着・降車','縦動線集中','改札口混雑','解消・退出'];
+const phaseTimes=['07:58','08:00','08:02','08:04','08:08'];
+const RATIO={stairL:0.3,stairR:0.3,esc:0.3,elv:0.1};
+
+// running flow values for UI
+let flowL=0,flowR=0,flowE=0,flowV=0,flowExit=0;
+
+function inject(p){
+  const t=ptimer/phaseDur[p];
+  const sin1=Math.sin(t*Math.PI);
+
+  if(p===0){
+    // sparse background
+    addSource(g1F,0,0,0.003,20);
+    addSource(g2F,0,0,0.002,20);
+  }
+  if(p===1){
+    // Crowd pours from train doors onto 1F
+    [-16,-8,0,8,16].forEach(x=>{
+      addSource(g1F,x,-5,0.04+t*0.04,4.5);
+    });
+    addSource(g1F,0,0,0.025*t,8);
+  }
+  if(p===2){
+    // Flow from 1F toward each shaft, proportional to ratio
+    const str=sin1;
+    // stairL (west -22)
+    addSource(g1F,-22,2,RATIO.stairL*str*0.06,5);
+    // stairR (east +22)
+    addSource(g1F, 22,2,RATIO.stairR*str*0.06,5);
+    // esc
+    addSource(g1F,escX,escZ,RATIO.esc*str*0.06,4);
+    // elv
+    addSource(g1F,elvX,elvZ,RATIO.elv*str*0.06,3);
+
+    // Shafts receive proportional flow
+    vShafts[0].sourceAmount=RATIO.stairL*str*0.18;
+    vShafts[1].sourceAmount=RATIO.stairR*str*0.18;
+    vShafts[2].sourceAmount=RATIO.esc*str*0.18;
+    vShafts[3].sourceAmount=RATIO.elv*str*0.06;
+
+    // Arriving 2F near shaft exits
+    addSource(g2F,-22,3,RATIO.stairL*str*0.05,5);
+    addSource(g2F, 22,3,RATIO.stairR*str*0.05,5);
+    addSource(g2F,escX,escZ+1,RATIO.esc*str*0.05,4);
+    addSource(g2F,elvX,elvZ+1,RATIO.elv*str*0.04,3);
+
+    flowL=RATIO.stairL*sin1; flowR=RATIO.stairR*sin1;
+    flowE=RATIO.esc*sin1;    flowV=RATIO.elv*sin1;
+  } else {
+    vShafts.forEach(s=>s.sourceAmount=0);
+    if(p!==2){flowL=flowR=flowE=flowV=0;}
+  }
+  if(p===3){
+    // Flow from 2F arrival zones toward gates
+    gateXs.forEach(gx=>{
+      addSource(g2F,gx,0,0.055+sin1*0.04,5.5);
+    });
+    addSource(g2F,kx,kz,0.02,4.5);
+    // trickle out to exit areas
+    addSource(gExA,-22,-4,t*0.026,5);
+    addSource(gExB, 22,-4,t*0.014,5);
+    flowExit=t*0.3;
+  }
+  if(p===4){
+    // Drain toward exits
+    addSource(gExA,-22,-4,0.062,6);
+    addSource(gExB, 22,-4,0.028,6);
+    flowExit=0.8-t*0.75;
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  TRAIN
+// ═══════════════════════════════════════════════
+let trainX=65,trainDocked=false,trainDepart=false,trainDelay=0;
+
+// ═══════════════════════════════════════════════
+//  UI helpers
+// ═══════════════════════════════════════════════
+function gridAvg(grid){
+  let s=0; for(let i=0;i<grid.dens.length;i++) s+=grid.dens[i];
+  return s/grid.dens.length;
+}
+function toStr(v){ return Math.round(Math.min(100,v*180))+'%'; }
+function toPct(v){ return Math.min(100,v*180); }
+
+// ═══════════════════════════════════════════════
+//  MAIN LOOP
+// ═══════════════════════════════════════════════
+let frame=0;
+function animate(){
+  requestAnimationFrame(animate);
+  frame++;
+
+  ptimer++;
+  if(ptimer>=phaseDur[phase]){
+    ptimer=0;
+    phase=(phase+1)%5;
+    if(phase===0){ trainX=65;trainDocked=false;trainDepart=false;trainDelay=0;trainGroup.position.x=65; }
+  }
+
+  inject(phase);
+
+  // Fluid simulation steps
+  diffuseGrid(g1F,0.08);
+  diffuseGrid(g2F,0.08);
+  diffuseGrid(gExA,0.07);
+  diffuseGrid(gExB,0.07);
+
+  // Decay per phase
+  const decayRate={0:0.012, 1:0.005, 2:0.014, 3:0.006, 4:0.015};
+  decayGrid(g1F, decayRate[phase]);
+  decayGrid(g2F, decayRate[phase]);
+  decayGrid(gExA,(phase===4)?0.008:0.018);
+  decayGrid(gExB,(phase===4)?0.008:0.018);
+
+  renderGrid(g1F,heatColor);
+  renderGrid(g2F,heatColor);
+  renderGrid(gExA,exitColor);
+  renderGrid(gExB,exitColor);
+
+  // Shafts
+  vShafts.forEach(sh=>updateShaft(sh, sh.sourceAmount||0));
+
+  // Train
+  if(phase>=1&&!trainDocked){ trainX=Math.max(0,trainX-1.0); trainGroup.position.x=trainX; if(trainX<=0)trainDocked=true; }
+  if(phase>=3&&trainDocked&&!trainDepart){ trainDelay++; if(trainDelay>45)trainDepart=true; }
+  if(trainDepart){ trainGroup.position.x-=1.3; if(trainGroup.position.x<-80)trainDepart=false; }
+
+  // Lights
+  elvLight.intensity=0.6+Math.sin(frame*0.05)*0.4;
+  exitLights.forEach((l,i)=>{ l.intensity=1.4+Math.sin(frame*0.07+i)*0.3; });
+  scene.children.filter(c=>c.isPointLight&&c.color.r>0.85&&c.color.g<0.3).forEach(l=>{
+    l.intensity=1.0+Math.sin(frame*0.11)*0.25;
+  });
+
+  // ─ UI ─
+  const c1=toPct(gridAvg(g1F)),c2=toPct(gridAvg(g2F)),cE=toPct(flowExit*0.6);
+  document.getElementById('fill1').style.width=c1+'%';
+  document.getElementById('fill2').style.width=c2+'%';
+  document.getElementById('fillE').style.width=cE+'%';
+  document.getElementById('pct1').textContent=Math.round(c1)+'%';
+  document.getElementById('pct2').textContent=Math.round(c2)+'%';
+  document.getElementById('pctE').textContent=Math.round(cE)+'%';
+
+  const mk=(v)=>{const h=v/100;const r=Math.round(h*210);return`linear-gradient(90deg,#4a90e2,rgb(${r},${Math.round(80*(1-h))},${Math.round(200*(1-h))}))`};
+  document.getElementById('fill1').style.background=mk(c1);
+  document.getElementById('fill2').style.background=mk(c2);
+
+  const tot=flowL+flowR+flowE+flowV;
+  const s=tot>0?Math.min(100,tot*140):0;
+  document.getElementById('fb-stairL').style.width=(s*(flowL/(tot+1e-9)))+'%';
+  document.getElementById('fb-stairR').style.width=(s*(flowR/(tot+1e-9)))+'%';
+  document.getElementById('fb-esc').style.width=(s*(flowE/(tot+1e-9)))+'%';
+  document.getElementById('fb-elv').style.width=(s*(flowV/(tot+1e-9))*0.5)+'%';
+
+  document.getElementById('clock').textContent=phaseTimes[phase];
+  document.getElementById('phase-badge').textContent=`PHASE ${phase} / ${phaseNames[phase]}`;
+  for(let i=0;i<5;i++) document.getElementById('tlp'+i).classList.toggle('active',i===phase);
+
+  renderer.render(scene,cam);
+}
+animate();
+</script>
+</body>
+</html>
